@@ -36,10 +36,7 @@ function handleCatFileCommand(args: string[]) {
       throw new Error(`Invalid blob SHA: ${blobSHA}`);
     }
 
-    const filePath = path.resolve(
-      __dirname,
-      `../.git/objects/${blobSHA.slice(0, 2)}/${blobSHA.slice(2)}`
-    );
+    const filePath = `.git/objects/${blobSHA.slice(0, 2)}/${blobSHA.slice(2)}`;
 
     readAndDecompressFile(filePath);
   } catch (error) {
