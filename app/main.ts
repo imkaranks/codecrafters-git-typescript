@@ -5,12 +5,21 @@ import crypto from "crypto";
 
 const args = process.argv.slice(2);
 const command = args[0];
+const gitIgnoredFiles = getIgnoredDirs();
 
 enum Commands {
   Init = "init",
   CatFile = "cat-file",
   HashObject = "hash-object",
   LsTree = "ls-tree",
+  WriteTree = "write-tree",
+}
+
+enum TreeEntryModes {
+  RegularFile = "100644",
+  ExecutableFile = "100755",
+  SymbolicLink = "120000",
+  Directory = "040000",
 }
 
 function initializeGitDirectory() {
@@ -180,6 +189,120 @@ function handleLsTreeCommand() {
   }
 }
 
+function handleWriteTreeCommand() {
+  const fileMp = new Map<string, string[]>();
+  const treeMp = new Map<string, string[]>();
+  const dirToTreeHashMp = new Map<string, string>();
+
+  function traverseFiles(dir: string) {
+    const files = fs.readdirSync(dir, { withFileTypes: true });
+
+    files.forEach((file) => {
+      if (gitIgnoredFiles.includes(file.name)) return;
+
+      const fullPath = path.join(dir, file.name);
+      const fileStat = fs.statSync(fullPath);
+
+      if (file.isDirectory()) {
+        fileMp.set(dir, [...(fileMp.get(dir) || []), file.name]);
+
+        traverseFiles(fullPath);
+
+        if (fileMp.get(fullPath)) {
+          fileMpToTreeMp(fullPath);
+        }
+      } else if (file.isFile()) {
+        fileMp.set(dir, [...(fileMp.get(dir) || []), file.name]);
+      }
+    });
+
+    if (fileMp.get(dir)) {
+      fileMpToTreeMp(dir);
+    }
+  }
+
+  traverseFiles(process.cwd());
+
+  function fileMpToTreeMp(fileSrcPath: string) {
+    const files = fileMp.get(fileSrcPath);
+
+    if (files) {
+      const bufferContent: string[] = [];
+
+      files.forEach((file) => {
+        const filePath = path.join(fileSrcPath, file);
+        const fileStat = fs.statSync(filePath);
+
+        if (fileStat.isDirectory() && dirToTreeHashMp.get(filePath)) {
+          const hash = dirToTreeHashMp.get(filePath);
+          bufferContent.push(`${TreeEntryModes.Directory} ${file}\0${hash}`);
+        } else if (fileStat.isFile()) {
+          const fileContent = fs.readFileSync(filePath);
+          const blobMetaData = Buffer.from(`blob ${fileContent.length}\0`);
+          const blobContent = Buffer.concat([blobMetaData, fileContent]);
+          const hash = crypto
+            .createHash("sha1")
+            .update(blobContent)
+            .digest("hex");
+
+          // TODO: handle add blob file in git objects
+          const objectDirPath = `.git/objects/${hash.slice(0, 2)}`;
+          const objectFilePath = `${objectDirPath}/${hash.slice(2)}`;
+          const compressedContents = zlib.deflateSync(blobContent);
+          if (!fs.existsSync(objectDirPath)) {
+            fs.mkdirSync(objectDirPath);
+          }
+          fs.writeFileSync(objectFilePath, compressedContents);
+
+          const isExecutable = !!(fileStat.mode & 0o111);
+          const mode = isExecutable
+            ? TreeEntryModes.ExecutableFile
+            : TreeEntryModes.RegularFile;
+
+          bufferContent.push(`${mode} ${file}\0${hash}`);
+        }
+      });
+
+      // const fileContent = bufferContent.join("\n");
+      const fileContent = Buffer.from(bufferContent.join("\n"));
+      const hash = crypto.createHash("sha1").update(fileContent).digest("hex");
+
+      // TODO: handle add tree file in git objects
+      const objectDirPath = `.git/objects/${hash.slice(0, 2)}`;
+      const objectFilePath = `${objectDirPath}/${hash.slice(2)}`;
+      const compressedContents = zlib.deflateSync(fileContent);
+      if (!fs.existsSync(objectDirPath)) {
+        fs.mkdirSync(objectDirPath);
+      }
+      fs.writeFileSync(objectFilePath, compressedContents);
+
+      treeMp.set(hash, bufferContent);
+      dirToTreeHashMp.set(fileSrcPath, `${hash}`);
+    }
+  }
+
+  // console.log(fileMp, treeMp, dirToTreeHashMp);
+  // console.log(treeMp);
+
+  const treeSHA = dirToTreeHashMp.get(process.cwd());
+
+  if (treeSHA) {
+    console.log(treeSHA);
+  }
+}
+
+function getIgnoredDirs() {
+  const contents = fs.readFileSync(path.resolve(process.cwd(), ".gitignore"));
+
+  return (
+    contents
+      .toString()
+      .split("\n")
+      // remove comments
+      .filter((dir) => !dir.startsWith("# "))
+  );
+}
+
 switch (command) {
   case Commands.Init:
     initializeGitDirectory();
@@ -195,6 +318,10 @@ switch (command) {
 
   case Commands.LsTree:
     handleLsTreeCommand();
+    break;
+
+  case Commands.WriteTree:
+    handleWriteTreeCommand();
     break;
 
   default:
