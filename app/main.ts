@@ -10,6 +10,7 @@ enum Commands {
   Init = "init",
   CatFile = "cat-file",
   HashObject = "hash-object",
+  LsTree = "ls-tree",
 }
 
 function initializeGitDirectory() {
@@ -134,6 +135,51 @@ function writeGitHashObject(hash: string, contents: Buffer) {
   }
 }
 
+function handleLsTreeCommand() {
+  try {
+    if (args.length < 3) {
+      throw new Error(
+        "Insufficient arguments: Expected at least a flag and a tree SHA"
+      );
+    }
+
+    const flag = args[1];
+    const treeSHA = args[2];
+
+    const treePath = `.git/objects/${treeSHA.slice(0, 2)}/${treeSHA.slice(2)}`;
+
+    if (!fs.existsSync(treePath)) {
+      throw new Error("Tree does not exists");
+    }
+
+    const compressedContents = fs.readFileSync(treePath);
+    let decompressedContents: Buffer;
+
+    try {
+      decompressedContents = zlib.unzipSync(compressedContents);
+    } catch (error) {
+      throw new Error("Failed to decompress the file");
+    }
+
+    const contents = decompressedContents
+      .toString()
+      .split("\0")
+      .slice(1, -1)
+      .reduce(
+        (acc: string[], e) => [...acc, e.split(" ").at(-1) as string],
+        []
+      );
+
+    console.log(contents);
+  } catch (error) {
+    console.log(
+      error instanceof Error
+        ? error.message
+        : "Failed to handle ls-tree command"
+    );
+  }
+}
+
 switch (command) {
   case Commands.Init:
     initializeGitDirectory();
@@ -145,6 +191,10 @@ switch (command) {
 
   case Commands.HashObject:
     handleHashObjectCommand();
+    break;
+
+  case Commands.LsTree:
+    handleLsTreeCommand();
     break;
 
   default:
